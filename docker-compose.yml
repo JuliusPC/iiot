@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  zenoh:
+    image: eclipse/zenoh:latest
+    container_name: zenoh-router
+    ports:
+      - "7447:7447"
+      - "8000:8000"
+    command: ["--listen", "tcp/0.0.0.0:7447"]
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: timescaledb
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=zenoh_password
+      - POSTGRES_DB=telemetry
+    volumes:
+      - timescaledb-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d telemetry"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ttn-bridge:
+    build: ./ttn-bridge
+    container_name: ttn-bridge
+    depends_on:
+      zenoh:
+        condition: service_started
+    environment:
+      - ZENOH_CONNECT=tcp/zenoh-router:7447
+      - TTN_APP_ID=hsel-iiot-tracker@ttn
+      - TTN_API_KEY=NNSXS.MP67DLNA3AJ7PG6WQPVO4APIFZDCECQCKC3RULY.DAGWFSXKUXVHIGLYAYOL6AKVO5YF7M5D4NXKEO5Y3Y6OCFRPBFBQ
+      - TTN_SERVER=eu1.cloud.thethings.network
+
+  analytics-service:
+    build: ./analytics-service
+    container_name: analytics-service
+    depends_on:
+      zenoh:
+        condition: service_started
+    environment:
+      - ZENOH_CONNECT=tcp/zenoh-router:7447
+
+  timescale-writer:
+    build: ./timescale-writer
+    container_name: timescale-writer
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      zenoh:
+        condition: service_started
+    environment:
+      - DB_HOST=timescaledb
+      - DB_NAME=telemetry
+      - DB_USER=postgres
+      - DB_PASSWORD=zenoh_password
+      - DB_PORT=5432
+      - ZENOH_CONNECT=tcp/zenoh-router:7447
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - timescaledb
+
+volumes:
+  timescaledb-data:
+  grafana-data:
